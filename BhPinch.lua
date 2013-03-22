@@ -1,7 +1,7 @@
 --[[ 
 BhPinch.lua
 
-Two finger, drag, rotate and scaling for Gideros sprites.
+Two finger drag, rotate and scaling for Gideros sprites.
  
 MIT License
 Copyright (C) 2013. Andy Bower, Bowerhaus LLP
@@ -22,13 +22,20 @@ DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 --]]
 
-function Application:getContentDiagonal()
+local function getContentDiagonal()
 	return math.pt2dDistance(0, 0, application:getContentWidth(), application:getContentHeight())
 end
 
-local PINCH_DEFAULT_DRAG_HYSTERESIS=application:getContentDiagonal()/15 	-- logical pixels
-local PINCH_DEFAULT_SCALE_HYSTERESIS=application:getContentDiagonal()/15 	-- logical pixels
-local PINCH_DEFAULT_ROTATE_HYSTERESIS=20									-- degrees
+
+local PINCH_DEFAULT_DRAG_HYSTERESIS=getContentDiagonal()/15 	-- logical pixels
+local PINCH_DEFAULT_SCALE_HYSTERESIS=getContentDiagonal()/15 	-- logical pixels
+local PINCH_DEFAULT_ROTATE_HYSTERESIS=20						-- degrees
+
+-- Set the following flag to true if you want an older-style GUI response to
+-- overcoming hysteresis. That is, you want the pinch operation to start at the
+-- original touch position.
+--
+local PINCH_OLD_STYLE_HYSTERESIS=false
 
 function Sprite:onPinchTouchBegin(event)
 	local allTouches=event.allTouches
@@ -88,7 +95,10 @@ function Sprite:onPinchTouchMove(event)
 		if pinchParams.allowDrag and not(pinch.isDragging) then
 			-- Not yet past drag hysteresis
 			if math.pt2dDistance(pinch.drag0.x, pinch.drag0.y, mx, my)>pinchParams.dragHysteresis then
-				pinch.isDragging=true
+				pinch.isDragging=true			
+				if not(pinchParams.oldStyleHysteresis) then
+					pinch.drag0={x=mx, y=my}
+				end
 			end
 		end
 		if pinch.isDragging then
@@ -102,12 +112,9 @@ function Sprite:onPinchTouchMove(event)
 			-- Not yet past rotation hysteresis
 			if math.abs(currentAngle-pinch.rot0)>pinchParams.rotateHysteresis then
 				pinch.isRotating=true
-				
-				-- We treat rotation as different from dragging. We base the rotation origin after
-				-- the hysteresis movement has occurred. This seems more natural in use and helps prevent
-				-- artifacts caused by fingers being close together.
-				--
-				pinch.rot0=math.pt2dAngle(f1.x,f1.y, f2.x, f2.y)
+				if not(pinchParams.oldStyleHysteresis) then
+					pinch.rot0=math.pt2dAngle(f1.x,f1.y, f2.x, f2.y)
+				end
 			end
 		end
 		if pinch.isRotating then
@@ -121,12 +128,9 @@ function Sprite:onPinchTouchMove(event)
 			local delta=math.pt2dDistance(f1.x,f1.y, f2.x, f2.y)-pinch.scale0
 			if math.abs(delta)>pinchParams.scaleHysteresis  then
 				pinch.isScaling=true
-				
-				-- Like rotation, we treat scaling as different from dragging. We base the scale origin after
-				-- the hysteresis movement has occurred. This seems more natural in use and helps prevent
-				-- artifacts caused by fingers being close together.
-				--
-				pinch.scale0=math.pt2dDistance(f1.x,f1.y, f2.x, f2.y)
+				if not(pinchParams.oldStyleHysteresis) then
+					pinch.scale0=math.pt2dDistance(f1.x,f1.y, f2.x, f2.y)
+				end
 			end
 		end
 		if pinch.isScaling then
@@ -136,7 +140,7 @@ function Sprite:onPinchTouchMove(event)
 			self:setScaleX(sx)
 			self:setScaleY(sy)
 		end
-	event:stopPropagation()
+		event:stopPropagation()
 	end	
 end
 
@@ -149,7 +153,7 @@ function Sprite:onPinchTouchEnd(event)
 		if pinch.fingers[event.touch.id] then
 			self._pinch=nil
 		end
-	event:stopPropagation()
+		event:stopPropagation()
 	end
 end
 
@@ -168,6 +172,8 @@ function Sprite:enablePinch(pinchParams)
 	params.allowScale=pinchParams.allowScale or pinchParams.allowScale==nil
 	params.scaleHysteresis=pinchParams.scaleHysteresis or PINCH_DEFAULT_SCALE_HYSTERESIS
 	params.scaleConstrainFunc=pinchParams.scaleConstrainFunc or function(obj, sx, sy) return sx, sy end	
+	
+	params.oldStyleHysteresis=pinchParams.oldStyleHysteresis or PINCH_OLD_STYLE_HYSTERESIS
 	self._pinchParams=params
 	
 	self:addEventListener(Event.TOUCHES_BEGIN, self.onPinchTouchBegin, self)

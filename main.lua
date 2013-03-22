@@ -1,7 +1,8 @@
 --[[ 
 BhPinchDemo.lua
 
-Demo of two finger, drag, rotate and scaling for Gideros sprites.
+Demo of two finger pinch (drag, rotate and scaling)
+and one finger drag for Gideros sprites.
  
 MIT License
 Copyright (C) 2013. Andy Bower, Bowerhaus LLP
@@ -32,22 +33,23 @@ local function constrainYOnly(sprite, x, y)
 	return sprite:getX(), y
 end
 
--- Free drag, rotation and scaling
+-- Free drag, rotation and scaling (with two fingers)
 local cow1=Bitmap.new(Texture.new("cow1.jpg"))
 cow1:setAnchorPoint(0.5, 0.5)
 cow1:setPosition(240, 160)
 stage:addChild(cow1)
 cow1:enablePinch()
 
--- Drag in X direction only, and rotation
+-- Drag in X direction only (with single touch), and rotation (two fingers)
 local cow2=Bitmap.new(Texture.new("cow2.jpg"))
 cow2:setScale(0.25)
 cow2:setAnchorPoint(0.5, 0.5)
 cow2:setPosition(100, 270)
 stage:addChild(cow2)
-cow2:enablePinch({allowScale=false, dragConstrainFunc=constrainXOnly})
+cow2:enablePinch({allowScale=false, allowDrag=false})
+cow2:enableOneTouchDrag({dragConstrainFunc=constrainXOnly, dragWithOneFingerOnly=true})
 
--- Drag in Y direction only
+-- Drag in Y direction only (two fingers)
 local cow3=Bitmap.new(Texture.new("cow3.jpg"))
 cow3:setScale(0.1)
 cow3:setAnchorPoint(0.5, 0.5)
