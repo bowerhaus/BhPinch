@@ -35,7 +35,7 @@ local DRAG_DEFAULT_HYSTERESIS=getContentDiagonal()/15 	-- logical pixels
 local DRAG_OLD_STYLE_HYSTERESIS=false
 
 function Sprite:onOneTouchDragTouchBegin(event)
-	if not(self._drag) then
+	if not(self._drag) and self:isVisibleDeeply() then
 		local dragParams=self._dragParams
 	
 		if dragParams.dragWithOneFingerOnly and #event.allTouches>1 then

@@ -39,7 +39,7 @@ local PINCH_OLD_STYLE_HYSTERESIS=false
 
 function Sprite:onPinchTouchBegin(event)
 	local allTouches=event.allTouches
-	if not(self._pinch) and #allTouches==2 then
+	if not(self._pinch) and #allTouches==2 and self:isVisibleDeeply() then
 		-- We have two fingers down
 		local f1=allTouches[1]
 		local f2=allTouches[2]
