@@ -22,20 +22,45 @@ DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 --]]
 
-local function getContentDiagonal()
-	return math.pt2dDistance(0, 0, application:getContentWidth(), application:getContentHeight())
+local PINCH_DEFAULT_DRAG_HYSTERESIS=0 		-- logical pixels
+local PINCH_DEFAULT_SCALE_HYSTERESIS=0 		-- logical pixels
+local PINCH_DEFAULT_ROTATE_HYSTERESIS=0		-- degrees
+
+-- The following code relies on matrix operations that are not available as standard in Gideros.
+-- They are present in Arturs Soisin's GiderosCodingEasy library: https://github.com/ar2rsawseen/GiderosCodingEasy
+-- but as of 26/MAR/13 there appears to be a bug in the matrix multiplication in that library so I'm
+-- including a copy of the relevant methods here. Because of this, you can also use BhPinch without GiderosCodingEasy
+-- if required.
+
+function Matrix:rotate(deg)
+	local rad = math.rad(deg)
+	return self:multiply(Matrix.new(math.cos(rad), math.sin(rad), -math.sin(rad), math.cos(rad), 0, 0))
 end
 
+function Matrix:translate(x,y)
+	if not y then y = x end
+	return self:multiply(Matrix.new(1, 0, 0, 1, x, y))
+end
 
-local PINCH_DEFAULT_DRAG_HYSTERESIS=getContentDiagonal()/15 	-- logical pixels
-local PINCH_DEFAULT_SCALE_HYSTERESIS=getContentDiagonal()/15 	-- logical pixels
-local PINCH_DEFAULT_ROTATE_HYSTERESIS=20						-- degrees
+function Matrix:scale(x,y)
+	if not y then y = x end
+	return self:multiply(Matrix.new(x, 0, 0, y, 0, 0))
+end
 
--- Set the following flag to true if you want an older-style GUI response to
--- overcoming hysteresis. That is, you want the pinch operation to start at the
--- original touch position.
---
-local PINCH_OLD_STYLE_HYSTERESIS=false
+function Matrix:multiply(matrix)
+	local m11 = matrix:getM11()*self:getM11() + matrix:getM12()*self:getM21()
+	local m12 = matrix:getM11()*self:getM12() + matrix:getM12()*self:getM22()
+	local m21 = matrix:getM21()*self:getM11() + matrix:getM22()*self:getM21()
+	local m22 = matrix:getM21()*self:getM12() + matrix:getM22()*self:getM22()
+	local tx  = matrix:getM11()*self:getTx()  + matrix:getM12()*self:getTy() + matrix:getTx()
+	local ty  = matrix:getM21()*self:getTx()  + matrix:getM22()*self:getTy() + matrix:getTy()
+	self:setElements(m11, m12, m21, m22, tx, ty)
+	return self
+end
+
+function Matrix:copy()
+	return Matrix.new(self:getElements())
+end
 
 function Sprite:onPinchTouchBegin(event)
 	local allTouches=event.allTouches
@@ -44,7 +69,7 @@ function Sprite:onPinchTouchBegin(event)
 		local f1=allTouches[1]
 		local f2=allTouches[2]
 		local mx, my=(f1.x+f2.x)/2, (f1.y+f2.y)/2
-		if self:hitTestPoint(mx, my) then
+		if (self:hitTestPoint(f1.x, f1.y) or self:hitTestPoint(f2.x, f2.y)) and self:hitTestPoint(mx, my) then
 			-- Mid point is within receiver, start the pinch
 			local pinch={}
 			
@@ -53,13 +78,28 @@ function Sprite:onPinchTouchBegin(event)
 			pinch.initialScaleX=self:getScaleX()
 			pinch.initialScaleY=self:getScaleY()
 			pinch.initialRotation=self:getRotation()
+			pinch.initialMatrix=self:getMatrix()
 			
-			-- Save initial pinch
+			-- Save initial pinch (all coordinates are relative to parent)
+			local parent=self:getParent()
+			f1.x, f1.y=parent:globalToLocal(f1.x, f1.y)
+			f2.x, f2.y=parent:globalToLocal(f2.x, f2.y)
+			mx, my=(f1.x+f2.x)/2, (f1.y+f2.y)/2
+			
 			pinch.f10=f1
 			pinch.f20=f2
 			pinch.drag0={x=mx, y=my}
 			pinch.scale0=math.pt2dDistance(f1.x,f1.y, f2.x, f2.y)
 			pinch.rot0=math.pt2dAngle(f1.x,f1.y, f2.x, f2.y)
+			
+			local _, _, w, h=self:getBounds(self)
+			local ax, ay=0, 0
+			if self.getAnchorPoint then
+				ax, ay=self:getAnchorPoint()
+			end
+			local px=w*(0.5-ax)
+			local py=h*(0.5-ay)
+			pinch.gx, pinch.gy=self:localToLocal(px, py, parent)
 			
 			-- Remember initial fingers ids as indices
 			pinch.fingers={}
@@ -86,11 +126,31 @@ function Sprite:onPinchTouchMove(event)
 		pinch.touches[thisIndex]=event.touch
 		
 		-- Now work out what to do with the current position of both fingers
+		local parent=self:getParent()
 		local f1=pinch.touches[1]
 		local f2=pinch.touches[2]
+		f1.x, f1.y=parent:globalToLocal(f1.x, f1.y)
+		f2.x, f2.y=parent:globalToLocal(f2.x, f2.y)
 		local mx, my=(f1.x+f2.x)/2, (f1.y+f2.y)/2
-		local currentScale=math.pt2dDistance(f1.x,f1.y, f2.x, f2.y)
+		
+		-- Use rudimentatry 8 period exponential moving averages to smooth angle and scale changes.
+		local alpha=2/(8+1)
+		local currentScale=math.pt2dDistance(f1.x,f1.y, f2.x, f2.y)	
+		if pinch.smoothedScale then 
+			pinch.smoothedScale=pinch.smoothedScale+alpha*(currentScale-pinch.smoothedScale)
+		else 
+			pinch.smoothedScale=currentScale
+		end
+		
 		local currentAngle=math.pt2dAngle(f1.x,f1.y, f2.x, f2.y)
+		if pinch.smoothedAngle and math.abs(currentAngle-pinch.smoothedAngle)<45 then
+			pinch.smoothedAngle=pinch.smoothedAngle+alpha*(currentAngle-pinch.smoothedAngle)
+		else 
+			pinch.smoothedAngle=currentAngle
+		end
+		
+		local x, y, angle
+		local dx, dy, dangle, dscaleX, dscaleY=0, 0, 0, 1, 1	
 		
 		if pinchParams.allowDrag and not(pinch.isDragging) then
 			-- Not yet past drag hysteresis
@@ -98,29 +158,32 @@ function Sprite:onPinchTouchMove(event)
 				pinch.isDragging=true			
 				if not(pinchParams.oldStyleHysteresis) then
 					pinch.drag0={x=mx, y=my}
-				end
+				end					
 			end
 		end
 		if pinch.isDragging then
-			-- Is really dragging - do it
-			local x=mx-pinch.drag0.x+pinch.initialX
-			local y=my-pinch.drag0.y+pinch.initialY
-			self:setPosition(pinchParams.dragConstrainFunc(self, x, y))
+			-- Is really dragging?		
+			-- Calculate new x, y coordinates and constrain them
+			x=mx-(pinch.drag0.x-pinch.initialX)
+			y=my-(pinch.drag0.y-pinch.initialY)		
+			x, y=pinchParams.dragConstrainFunc(self, x, y)
+			
+			-- Compute delta from original location
+			dx=x-pinch.initialX
+			dy=y-pinch.initialY			
 		end
 		
 		if pinchParams.allowRotate and not(pinch.isRotating) then
 			-- Not yet past rotation hysteresis
 			if math.abs(currentAngle-pinch.rot0)>pinchParams.rotateHysteresis then
 				pinch.isRotating=true
-				if not(pinchParams.oldStyleHysteresis) then
-					pinch.rot0=math.pt2dAngle(f1.x,f1.y, f2.x, f2.y)
-				end
 			end
 		end
 		if pinch.isRotating then
-			-- Is really rotating - do it
-			local angle=currentAngle-pinch.rot0+pinch.initialRotation
-			self:setRotation(pinchParams.rotateConstrainFunc(self, angle))
+			-- Is really rotating
+			local rotationOffset0=pinch.rot0-pinch.initialRotation
+			local angle=pinchParams.rotateConstrainFunc(self, pinch.smoothedAngle-rotationOffset0)		
+			dangle=angle-pinch.initialRotation
 		end
 		
 		if pinchParams.allowScale and not(pinch.isScaling) then
@@ -128,18 +191,24 @@ function Sprite:onPinchTouchMove(event)
 			local delta=math.pt2dDistance(f1.x,f1.y, f2.x, f2.y)-pinch.scale0
 			if math.abs(delta)>pinchParams.scaleHysteresis  then
 				pinch.isScaling=true
-				if not(pinchParams.oldStyleHysteresis) then
-					pinch.scale0=math.pt2dDistance(f1.x,f1.y, f2.x, f2.y)
-				end
 			end
 		end
 		if pinch.isScaling then
 			-- Is really scaling - do it
-			local factor=currentScale/pinch.scale0
+			local factor=pinch.smoothedScale/pinch.scale0
 			local sx, sy=pinchParams.scaleConstrainFunc(self, pinch.initialScaleX*factor, pinch.initialScaleY*factor)
-			self:setScaleX(sx)
-			self:setScaleY(sy)
+			dscaleX=sx/pinch.initialScaleX
+			dscaleY=sy/pinch.initialScaleY
 		end
+								
+		-- Build new transform and apply it
+		local matrix=pinch.initialMatrix:copy()		
+		matrix:translate(-pinch.gx, -pinch.gy)
+		matrix:rotate(-dangle)
+		matrix:scale(dscaleX, dscaleY)
+		matrix:translate(pinch.gx+dx, pinch.gy+dy)
+		self:setMatrix(matrix)
+		
 		event:stopPropagation()
 	end	
 end
@@ -173,7 +242,6 @@ function Sprite:enablePinch(pinchParams)
 	params.scaleHysteresis=pinchParams.scaleHysteresis or PINCH_DEFAULT_SCALE_HYSTERESIS
 	params.scaleConstrainFunc=pinchParams.scaleConstrainFunc or function(obj, sx, sy) return sx, sy end	
 	
-	params.oldStyleHysteresis=pinchParams.oldStyleHysteresis or PINCH_OLD_STYLE_HYSTERESIS
 	self._pinchParams=params
 	
 	self:addEventListener(Event.TOUCHES_BEGIN, self.onPinchTouchBegin, self)

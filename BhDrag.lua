@@ -22,44 +22,34 @@ DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 --]]
 
-local function getContentDiagonal()
-	return math.pt2dDistance(0, 0, application:getContentWidth(), application:getContentHeight())
-end
-
-local DRAG_DEFAULT_HYSTERESIS=getContentDiagonal()/15 	-- logical pixels
-
--- Set the following flag to true if you want an older-style GUI response to
--- overcoming hysteresis. That is, you want the drag operation to start at the
--- original touch position.
---
-local DRAG_OLD_STYLE_HYSTERESIS=false
+local DRAG_DEFAULT_HYSTERESIS=0 	-- logical pixels
 
 function Sprite:onOneTouchDragTouchBegin(event)
-	if not(self._drag) and self:isVisibleDeeply() then
-		local dragParams=self._dragParams
+	local allTouches=event.allTouches
+	local dragParams=self._dragParams
+	local isAllowedTouches=#allTouches==1 or dragParams.allowMultitouchDrag
 	
-		if dragParams.dragWithOneFingerOnly and #event.allTouches>1 then
-			-- If our options specify use of only one finger then ignore
-			-- this touch if several are held down.
-			return
-		end
-		
+	if not(self._drag) and isAllowedTouches and self:isVisibleDeeply() then
 		-- We have a finger down
 		local finger=event.touch
 		if self:hitTestPoint(finger.x, finger.y) then
 			-- Touch point is within receiver, start the drag
 			local drag={}
 			
-			-- Save initial state of receiver
-			drag.initialX, drag.initialY=self:getPosition()
+			-- Save initial state of receiver.
+			-- First global location.
+			drag.initialX, drag.initialY=self:getParent():localToGlobal(self:getPosition())
 			
-			-- Save initial drag
+			-- Save initial drag state
 			drag.f0=table.copy(finger)
 			drag.touchId=finger.id
 			
 			self._drag=drag
 			event:stopPropagation()
 		end
+	end
+	if not(isAllowedTouches) then
+		self._drag=nil
 	end
 end
 
@@ -73,15 +63,13 @@ function Sprite:onOneTouchDragTouchMove(event)
 			-- Not yet past drag hysteresis
 			if math.pt2dDistance(drag.f0.x, drag.f0.y, fx, fy)>dragParams.dragHysteresis then
 				drag.isDragging=true
-				if not(dragParams.oldStyleHysteresis) then
-					drag.f0=table.copy(event.touch)
-				end
 			end
 		end
 		if drag.isDragging then
 			-- Is really dragging - do it
 			local x=fx-drag.f0.x+drag.initialX
 			local y=fy-drag.f0.y+drag.initialY
+			x, y=self:getParent():globalToLocal(x, y)
 			self:setPosition(dragParams.dragConstrainFunc(self, x, y))
 		end
 	event:stopPropagation()
@@ -104,9 +92,8 @@ function Sprite:enableOneTouchDrag(dragParams)
 	dragParams=dragParams or {}
 	
 	params.dragHysteresis=dragParams.dragHysteresis or DRAG_DEFAULT_HYSTERESIS
-	params.dragConstrainFunc=dragParams.dragConstrainFunc or function(obj, x, y) return x, y end
-	params.dragWithOneFingerOnly=dragParams.dragWithOneFingerOnly or false
-	params.oldStyleHysteresis=dragParams.oldStyleHysteresis or DRAG_OLD_STYLE_HYSTERESIS
+	params.dragConstrainFunc=dragParams.dragConstrainFunc or function(obj, x, y) return x, y end 
+	params.allowMultitouchDrag=dragParams.allowMultitouchDrag
 	self._dragParams=params
 	
 	self:addEventListener(Event.TOUCHES_BEGIN, self.onOneTouchDragTouchBegin, self)
